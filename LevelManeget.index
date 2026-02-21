@@ -1,0 +1,305 @@
+using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+using UnityEngine.SceneManagement;
+
+/// <summary>
+/// LevelManager — управляет состоянием уровня:
+/// собираемые объекты, спасённые NPC, таймер, завершение уровня.
+/// </summary>
+public class LevelManager : MonoBehaviour
+{
+public static LevelManager Instance { get; private set; }
+
+```
+[Header("Настройки уровня")]
+[SerializeField] string levelId = "W1_L1";          // уникальный ID уровня
+[SerializeField] string nextSceneName = "LevelSelect";
+
+[Header("Сбор предметов")]
+[SerializeField] int totalCoins    = 0;              // задаётся автоматически
+[SerializeField] int totalFireflies= 0;
+[SerializeField] int totalCageNPCs = 0;
+
+[Header("Условие победы")]
+[SerializeField] bool requireAllNPCs = false;        // нужно ли спасти ВСЕХ NPC
+[SerializeField] Transform levelEndTrigger;
+
+// Текущий счёт
+public int CollectedCoins     { get; private set; }
+public int CollectedFireflies { get; private set; }
+public int SavedNPCs          { get; private set; }
+
+// Таймер
+public float LevelTime { get; private set; }
+bool levelActive = true;
+
+// События
+public event System.Action<int> OnCoinCollected;
+public event System.Action<int> OnFireflyCollected;
+public event System.Action<int> OnNPCSaved;
+public event System.Action OnLevelComplete;
+public event System.Action OnPlayerDied;
+
+// Чекпоинт
+Vector3 lastCheckpointPos;
+Transform playerTransform;
+
+void Awake()
+{
+    if (Instance != null) { Destroy(gameObject); return; }
+    Instance = this;
+}
+
+void Start()
+{
+    // Считаем все collectible объекты на сцене
+    totalCoins      = FindObjectsByType<Collectible>(FindObjectsSortMode.None).Length > 0
+                      ? CountCollectibles(CollectibleType.Coin)     : 0;
+    totalFireflies  = CountCollectibles(CollectibleType.Firefly);
+    totalCageNPCs   = FindObjectsByType<CageNPC>(FindObjectsSortMode.None).Length;
+
+    playerTransform = GameObject.FindGameObjectWithTag("Player")?.transform;
+    if (playerTransform) lastCheckpointPos = playerTransform.position;
+
+    // Обновляем HUD
+    HUDController.Instance?.UpdateAll(CollectedCoins, totalCoins,
+                                      CollectedFireflies, totalFireflies,
+                                      SavedNPCs, totalCageNPCs);
+}
+
+int CountCollectibles(CollectibleType type)
+{
+    int count = 0;
+    foreach (var c in FindObjectsByType<Collectible>(FindObjectsSortMode.None))
+        if (c.Type == type) count++;
+    return count;
+}
+
+void Update()
+{
+    if (levelActive) LevelTime += Time.deltaTime;
+}
+
+// ════════════════════════════════════════════════════════════
+//  ПУБЛИЧНЫЕ МЕТОДЫ — вызываются из Collectible / CageNPC
+// ════════════════════════════════════════════════════════════
+
+public void AddCoin(int amount = 1)
+{
+    CollectedCoins += amount;
+    OnCoinCollected?.Invoke(CollectedCoins);
+    HUDController.Instance?.UpdateCoins(CollectedCoins, totalCoins);
+    CheckLevelCompletion();
+}
+
+public void AddFirefly(int amount = 1)
+{
+    CollectedFireflies += amount;
+    OnFireflyCollected?.Invoke(CollectedFireflies);
+    HUDController.Instance?.UpdateFireflies(CollectedFireflies, totalFireflies);
+}
+
+public void SaveNPC()
+{
+    SavedNPCs++;
+    OnNPCSaved?.Invoke(SavedNPCs);
+    HUDController.Instance?.UpdateNPCs(SavedNPCs, totalCageNPCs);
+    CheckLevelCompletion();
+}
+
+public void PlayerReachedEnd()
+{
+    if (!levelActive) return;
+    if (requireAllNPCs && SavedNPCs < totalCageNPCs)
+    {
+        // Показываем подсказку "Спаси всех существ!"
+        HUDController.Instance?.ShowHint("Спаси всех Лумиков сначала!");
+        return;
+    }
+    CompleteLevel();
+}
+
+public void PlayerDied()
+{
+    levelActive = false;
+    OnPlayerDied?.Invoke();
+    StartCoroutine(RespawnRoutine());
+}
+
+public void SetCheckpoint(Vector3 pos) => lastCheckpointPos = pos;
+
+// ════════════════════════════════════════════════════════════
+//  ВНУТРЕННИЕ
+// ════════════════════════════════════════════════════════════
+
+void CheckLevelCompletion()
+{
+    // Все монеты + все NPC? (опционально)
+}
+
+void CompleteLevel()
+{
+    levelActive = false;
+    OnLevelComplete?.Invoke();
+
+    // Сохраняем результат
+    SaveLevelResult();
+
+    // Показываем экран победы, затем переходим
+    StartCoroutine(LevelCompleteRoutine());
+}
+
+IEnumerator LevelCompleteRoutine()
+{
+    HUDController.Instance?.ShowLevelComplete(CollectedCoins, totalCoins,
+                                               SavedNPCs, totalCageNPCs, LevelTime);
+    yield return new WaitForSeconds(3f);
+    SceneManager.LoadScene(nextSceneName);
+}
+
+IEnumerator RespawnRoutine()
+{
+    yield return new WaitForSeconds(1.5f);
+
+    if (playerTransform)
+    {
+        playerTransform.position = lastCheckpointPos;
+        PlayerHealth ph = playerTransform.GetComponent<PlayerHealth>();
+        ph?.Respawn();
+    }
+    levelActive = true;
+}
+
+void SaveLevelResult()
+{
+    PlayerPrefs.SetInt($"{levelId}_coins",     CollectedCoins);
+    PlayerPrefs.SetInt($"{levelId}_fireflies", CollectedFireflies);
+    PlayerPrefs.SetInt($"{levelId}_npcs",      SavedNPCs);
+    PlayerPrefs.SetFloat($"{levelId}_time",    LevelTime);
+    PlayerPrefs.SetInt($"{levelId}_complete",  1);
+    PlayerPrefs.Save();
+}
+```
+
+}
+
+// ════════════════════════════════════════════════════════════════
+//  COLLECTIBLE — монетки и светлячки
+// ════════════════════════════════════════════════════════════════
+public enum CollectibleType { Coin, Firefly, Special }
+
+public class Collectible : MonoBehaviour
+{
+[SerializeField] CollectibleType type = CollectibleType.Coin;
+[SerializeField] int value = 1;
+[SerializeField] AudioClip collectSound;
+[SerializeField] GameObject collectEffect;  // VFX префаб
+
+```
+public CollectibleType Type => type;
+
+void OnTriggerEnter2D(Collider2D col)
+{
+    if (!col.CompareTag("Player")) return;
+
+    // Эффект
+    if (collectEffect) Instantiate(collectEffect, transform.position, Quaternion.identity);
+    if (collectSound)  AudioSource.PlayClipAtPoint(collectSound, transform.position);
+
+    // Уведомляем менеджер
+    switch (type)
+    {
+        case CollectibleType.Coin:    LevelManager.Instance?.AddCoin(value);    break;
+        case CollectibleType.Firefly: LevelManager.Instance?.AddFirefly(value); break;
+    }
+
+    // Красивое исчезновение
+    StartCoroutine(CollectAnimation());
+}
+
+IEnumerator CollectAnimation()
+{
+    // Простое масштабирование вниз
+    float t = 0;
+    Vector3 startScale = transform.localScale;
+    while (t < 0.2f)
+    {
+        t += Time.deltaTime;
+        transform.localScale = Vector3.Lerp(startScale, Vector3.zero, t / 0.2f);
+        yield return null;
+    }
+    Destroy(gameObject);
+}
+```
+
+}
+
+// ════════════════════════════════════════════════════════════════
+//  CAGE NPC — Лумики в клетках (как Teensies в Rayman)
+// ════════════════════════════════════════════════════════════════
+public class CageNPC : MonoBehaviour
+{
+[SerializeField] GameObject freeNPCPrefab;       // NPC после освобождения
+[SerializeField] AudioClip  freeSound;
+[SerializeField] GameObject cageBreakEffect;
+[SerializeField] int        hitsToFree = 1;      // ударов чтобы освободить
+
+```
+int hitsReceived;
+bool freed;
+
+public void Hit()
+{
+    if (freed) return;
+    hitsReceived++;
+    if (hitsReceived >= hitsToFree) Free();
+}
+
+// Клетка — IDamageable, принимает удары от игрока
+void Start() => gameObject.AddComponent<CageDamageReceiver>().cage = this;
+
+void Free()
+{
+    freed = true;
+
+    if (cageBreakEffect)
+        Instantiate(cageBreakEffect, transform.position, Quaternion.identity);
+    if (freeSound)
+        AudioSource.PlayClipAtPoint(freeSound, transform.position);
+    if (freeNPCPrefab)
+        Instantiate(freeNPCPrefab, transform.position, Quaternion.identity);
+
+    LevelManager.Instance?.SaveNPC();
+    Destroy(gameObject);
+}
+```
+
+}
+
+/// <summary>Передаёт удары от PlayerController в CageNPC.</summary>
+public class CageDamageReceiver : MonoBehaviour, IDamageable
+{
+public CageNPC cage;
+public void TakeDamage(int damage) => cage?.Hit();
+}
+
+// ════════════════════════════════════════════════════════════════
+//  CHECKPOINT — контрольная точка
+// ════════════════════════════════════════════════════════════════
+public class CheckpointSystem : MonoBehaviour
+{
+[SerializeField] Animator anim;
+bool activated;
+
+```
+void OnTriggerEnter2D(Collider2D col)
+{
+    if (activated || !col.CompareTag("Player")) return;
+    activated = true;
+    LevelManager.Instance?.SetCheckpoint(transform.position);
+    anim?.SetTrigger("Activate");
+}
+```
+
+}
