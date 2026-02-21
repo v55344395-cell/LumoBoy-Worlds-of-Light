@@ -1,0 +1,138 @@
+using UnityEngine;
+using UnityEngine.UI;
+using TMPro;
+
+/// <summary>
+/// HUDController — заглушка UI.
+/// Добавь реальные ссылки на элементы через инспектор.
+/// </summary>
+public class HUDController : MonoBehaviour
+{
+public static HUDController Instance { get; private set; }
+
+```
+[Header("Монеты")]
+[SerializeField] TextMeshProUGUI coinsText;
+[Header("Светлячки")]
+[SerializeField] TextMeshProUGUI firefliesText;
+[Header("NPC")]
+[SerializeField] TextMeshProUGUI npcsText;
+[Header("HP игрока")]
+[SerializeField] Image[] heartImages;
+[Header("Босс")]
+[SerializeField] GameObject bossHPBar;
+[SerializeField] TextMeshProUGUI bossNameText;
+[SerializeField] Slider bossHPSlider;
+[Header("Прочее")]
+[SerializeField] TextMeshProUGUI hintText;
+[SerializeField] GameObject levelCompletePanel;
+[SerializeField] TextMeshProUGUI levelCompleteStats;
+
+void Awake()
+{
+    if (Instance) { Destroy(gameObject); return; }
+    Instance = this;
+}
+
+public void UpdateCoins(int current, int total)         => SetText(coinsText, $"{current}/{total}");
+public void UpdateFireflies(int current, int total)     => SetText(firefliesText, $"{current}/{total}");
+public void UpdateNPCs(int current, int total)          => SetText(npcsText, $"{current}/{total}");
+
+public void UpdateAll(int coins, int tCoins, int flies, int tFlies, int npcs, int tNPCs)
+{
+    UpdateCoins(coins, tCoins);
+    UpdateFireflies(flies, tFlies);
+    UpdateNPCs(npcs, tNPCs);
+}
+
+public void UpdatePlayerHealth(int current, int max)
+{
+    if (heartImages == null) return;
+    for (int i = 0; i < heartImages.Length; i++)
+        if (heartImages[i]) heartImages[i].enabled = i < current;
+}
+
+public void ShowBossHealth(string name, int current, int max)
+{
+    if (bossHPBar) bossHPBar.SetActive(true);
+    SetText(bossNameText, name);
+    if (bossHPSlider) { bossHPSlider.maxValue = max; bossHPSlider.value = current; }
+}
+
+public void UpdateBossHealth(int current, int max)
+{
+    if (bossHPSlider) { bossHPSlider.maxValue = max; bossHPSlider.value = current; }
+}
+
+public void HideBossHealth()
+{
+    if (bossHPBar) bossHPBar.SetActive(false);
+}
+
+public void ShowHint(string msg)
+{
+    if (!hintText) return;
+    hintText.text    = msg;
+    hintText.enabled = true;
+    CancelInvoke(nameof(HideHint));
+    Invoke(nameof(HideHint), 2f);
+}
+void HideHint() { if (hintText) hintText.enabled = false; }
+
+public void ShowLevelComplete(int coins, int tCoins, int npcs, int tNPCs, float time)
+{
+    if (levelCompletePanel) levelCompletePanel.SetActive(true);
+    string stats = $"Монеты: {coins}/{tCoins}\nЛумики: {npcs}/{tNPCs}\nВремя: {time:F1}s";
+    SetText(levelCompleteStats, stats);
+}
+
+static void SetText(TextMeshProUGUI t, string s) { if (t) t.text = s; }
+```
+
+}
+
+// ════════════════════════════════════════════════════════════════
+//  GAMEMANAGER
+// ════════════════════════════════════════════════════════════════
+using UnityEngine.SceneManagement;
+
+public class GameManager : MonoBehaviour
+{
+public static GameManager Instance { get; private set; }
+
+```
+[Header("Всего монет в игре")]
+public int totalGlobalCoins;
+
+public int GlobalCoins   => PlayerPrefs.GetInt("global_coins", 0);
+
+void Awake()
+{
+    if (Instance) { Destroy(gameObject); return; }
+    Instance = this;
+    DontDestroyOnLoad(gameObject);
+}
+
+public void AddGlobalCoins(int amount)
+{
+    int c = GlobalCoins + amount;
+    PlayerPrefs.SetInt("global_coins", c);
+    PlayerPrefs.Save();
+
+    // Проверяем разблокировку скинов
+    SkinManager.Instance?.CheckUnlocks();
+}
+
+public void LoadScene(string name) => SceneManager.LoadScene(name);
+
+public void QuitGame()
+{
+```
+
+#if UNITY_EDITOR
+UnityEditor.EditorApplication.isPlaying = false;
+#else
+Application.Quit();
+#endif
+}
+}
