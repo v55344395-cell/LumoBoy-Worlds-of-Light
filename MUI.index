@@ -1,0 +1,114 @@
+using UnityEngine;
+using UnityEngine.UI;
+using UnityEngine.EventSystems;
+
+/// <summary>
+/// Мобильный HUD: виртуальный джойстик + кнопки прыжок/атака/парение.
+/// Прикрепи к Canvas. Ссылки на кнопки и PlayerController через инспектор.
+/// </summary>
+public class MobileInputUI : MonoBehaviour
+{
+[Header(“Ссылки”)]
+[SerializeField] PlayerController player;
+
+```
+[Header("Джойстик")]
+[SerializeField] RectTransform joystickBg;       // фон джойстика
+[SerializeField] RectTransform joystickHandle;   // ручка
+[SerializeField] float joystickRadius = 80f;     // максимальный радиус движения ручки
+
+[Header("Кнопки")]
+[SerializeField] Button btnJump;
+[SerializeField] Button btnAttack;
+[SerializeField] Button btnHover;   // парение / хвост-вертолётик
+
+// Состояние джойстика
+int joystickTouchId = -1;
+Vector2 joystickOrigin;
+
+void Start()
+{
+    // ── Настройка кнопок ──────────────────────────────────────
+
+    // Прыжок: нажал — прыгнул, держишь — высокий прыжок
+    AddPointerEvents(btnJump,
+        onDown: () => { player.SetJumpPressed(true); player.SetJumpHeld(true); },
+        onUp:   () => { player.SetJumpHeld(false); });
+
+    // Атака: просто нажатие
+    AddPointerEvents(btnAttack,
+        onDown: () => player.SetAttackPressed(true),
+        onUp:   () => player.SetAttackPressed(false));
+
+    // Парение: держишь — паришь
+    AddPointerEvents(btnHover,
+        onDown: () => player.SetHoverHeld(true),
+        onUp:   () => player.SetHoverHeld(false));
+
+    // ── Настройка джойстика ───────────────────────────────────
+    if (joystickBg != null)
+    {
+        AddJoystickEvents(joystickBg);
+    }
+}
+
+// ════════════════════════════════════════════════════════════
+//  ДЖОЙСТИК
+// ════════════════════════════════════════════════════════════
+void AddJoystickEvents(RectTransform rt)
+{
+    EventTrigger et = rt.gameObject.GetComponent<EventTrigger>() 
+                      ?? rt.gameObject.AddComponent<EventTrigger>();
+
+    AddTrigger(et, EventTriggerType.PointerDown, (data) =>
+    {
+        PointerEventData pData = (PointerEventData)data;
+        joystickTouchId = pData.pointerId;
+        joystickOrigin  = pData.position;
+        joystickHandle.anchoredPosition = Vector2.zero;
+    });
+
+    AddTrigger(et, EventTriggerType.Drag, (data) =>
+    {
+        PointerEventData pData = (PointerEventData)data;
+        if (pData.pointerId != joystickTouchId) return;
+
+        Vector2 delta = pData.position - joystickOrigin;
+        delta = Vector2.ClampMagnitude(delta, joystickRadius);
+        joystickHandle.anchoredPosition = delta;
+
+        float horizontal = delta.x / joystickRadius;
+        player.SetHorizontalInput(horizontal);
+    });
+
+    AddTrigger(et, EventTriggerType.PointerUp, (data) =>
+    {
+        joystickTouchId = -1;
+        joystickHandle.anchoredPosition = Vector2.zero;
+        player.SetHorizontalInput(0f);
+    });
+}
+
+static void AddTrigger(EventTrigger et, EventTriggerType type,
+    UnityEngine.Events.UnityAction<BaseEventData> action)
+{
+    var entry = new EventTrigger.Entry { eventID = type };
+    entry.callback.AddListener(action);
+    et.triggers.Add(entry);
+}
+
+// ════════════════════════════════════════════════════════════
+//  КНОПКИ
+// ════════════════════════════════════════════════════════════
+static void AddPointerEvents(Button btn, System.Action onDown, System.Action onUp)
+{
+    if (btn == null) return;
+    EventTrigger et = btn.gameObject.GetComponent<EventTrigger>()
+                      ?? btn.gameObject.AddComponent<EventTrigger>();
+
+    AddTrigger(et, EventTriggerType.PointerDown, _ => onDown?.Invoke());
+    AddTrigger(et, EventTriggerType.PointerUp,   _ => onUp?.Invoke());
+}
+```
+
+}
