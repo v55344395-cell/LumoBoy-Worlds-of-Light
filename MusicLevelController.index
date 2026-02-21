@@ -1,0 +1,306 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+
+/// <summary>
+/// MusicLevelController — контроллер музыкального уровня.
+/// Уровень, где платформинг синхронизирован с ритмом музыки.
+///
+/// ВАЖНО: Вставь свой лицензированный .ogg трек в поле musicClip.
+/// Все таймкоды привязаны к AudioSettings.dspTime для точности.
+///
+/// Структура:
+///  1. MusicCue[] — события по таймкоду (спауны, эффекты, движение)
+///  2. BeatTracker — отслеживает удары в такт
+///  3. PlatformBeatMover — платформы, двигающиеся в ритм
+/// </summary>
+public class MusicLevelController : MonoBehaviour
+{
+[Header(“Музыка”)]
+[SerializeField] AudioSource musicSource;
+/// <summary>
+/// Вставь ЛИЦЕНЗИРОВАННЫЙ или royalty-free .ogg трек.
+/// Рекомендуется: OpenGameArt.org (CC0/CC-BY), FreeMusicArchive.org,
+/// incompetech.com (Kevin MacLeod, CC-BY).
+/// НЕ использовать треки Ubisoft или других правообладателей!
+/// </summary>
+[SerializeField] AudioClip musicClip;   // ← placeholder: твой трек здесь
+[SerializeField] float bpm = 128f;      // удары в минуту (измерь в DAW)
+[SerializeField] float musicOffset = 0f; // смещение в секундах (если трек начинается не с 0)
+
+```
+[Header("Таймкоды событий")]
+[SerializeField] MusicCue[] cues;       // массив событий по времени
+
+[Header("Эффекты")]
+[SerializeField] ParticleSystem[] beatParticles;  // вспышки на каждый бит
+
+// BPM утилиты
+public float BeatInterval => 60f / bpm;           // секунд на один бит
+public float MusicTime    => (float)(AudioSettings.dspTime - dspStartTime) + musicOffset;
+
+double dspStartTime;
+int    nextCueIndex;
+int    nextBeatIndex;
+float  levelStartDelay = 1f;    // пауза перед стартом
+bool   started;
+
+void Start()
+{
+    // Подготавливаем сцену
+    SortCues();
+    StartCoroutine(StartMusicLevel());
+}
+
+IEnumerator StartMusicLevel()
+{
+    yield return new WaitForSeconds(levelStartDelay);
+
+    // Запуск с точной синхронизацией через DSP время
+    dspStartTime = AudioSettings.dspTime;
+    if (musicClip != null)
+    {
+        musicSource.clip = musicClip;
+        musicSource.Play();
+    }
+    else
+    {
+        Debug.LogWarning("[MusicLevel] Трек не задан! Добавь royalty-free .ogg в musicClip.");
+    }
+
+    started = true;
+}
+
+void Update()
+{
+    if (!started) return;
+
+    ProcessCues();
+    ProcessBeats();
+}
+
+// ════════════════════════════════════════════════════════════
+//  СОБЫТИЯ ПО ТАЙМКОДУ
+// ════════════════════════════════════════════════════════════
+void ProcessCues()
+{
+    while (nextCueIndex < cues.Length && MusicTime >= cues[nextCueIndex].timeCode)
+    {
+        FireCue(cues[nextCueIndex]);
+        nextCueIndex++;
+    }
+}
+
+void FireCue(MusicCue cue)
+{
+    switch (cue.type)
+    {
+        case CueType.SpawnEnemy:
+            if (cue.prefab)
+                Instantiate(cue.prefab, cue.spawnPosition, Quaternion.identity);
+            break;
+
+        case CueType.MovePlatform:
+            cue.targetPlatform?.GetComponent<PlatformBeatMover>()?.TriggerMove(cue.moveOffset);
+            break;
+
+        case CueType.CameraShake:
+            CameraShaker.Instance?.Shake(cue.shakeIntensity, 0.3f);
+            break;
+
+        case CueType.BgColorFlash:
+            StartCoroutine(FlashBackground(cue.flashColor));
+            break;
+
+        case CueType.SpawnCollectible:
+            if (cue.prefab)
+                Instantiate(cue.prefab, cue.spawnPosition, Quaternion.identity);
+            break;
+
+        case CueType.PlaySFX:
+            if (cue.sfxClip)
+                AudioSource.PlayClipAtPoint(cue.sfxClip, cue.spawnPosition);
+            break;
+
+        case CueType.TriggerAnimation:
+            cue.animTarget?.SetTrigger(cue.animTrigger);
+            break;
+
+        case CueType.Custom:
+            cue.customEvent?.Invoke();
+            break;
+    }
+}
+
+// ════════════════════════════════════════════════════════════
+//  АВТОМАТИЧЕСКОЕ ОТСЛЕЖИВАНИЕ БИТОВ (для визуальных эффектов)
+// ════════════════════════════════════════════════════════════
+void ProcessBeats()
+{
+    float expectedBeatTime = nextBeatIndex * BeatInterval;
+    if (MusicTime >= expectedBeatTime)
+    {
+        OnBeat(nextBeatIndex);
+        nextBeatIndex++;
+    }
+}
+
+void OnBeat(int beatNumber)
+{
+    // Вспышки частиц на каждый бит
+    foreach (var ps in beatParticles)
+        ps?.Play();
+
+    // Каждые 4 бита — акцент (сильная доля)
+    if (beatNumber % 4 == 0) OnBarStart(beatNumber / 4);
+}
+
+void OnBarStart(int barNumber)
+{
+    // Здесь можно добавить логику каждые 4 удара (такт)
+    // Например: менять цвет фона, масштабировать элементы
+}
+
+// ════════════════════════════════════════════════════════════
+//  ВСПОМОГАТЕЛЬНОЕ
+// ════════════════════════════════════════════════════════════
+void SortCues() =>
+    Array.Sort(cues, (a, b) => a.timeCode.CompareTo(b.timeCode));
+
+IEnumerator FlashBackground(Color color)
+{
+    Camera.main.backgroundColor = color;
+    yield return new WaitForSeconds(0.1f);
+    Camera.main.backgroundColor = Color.black;
+}
+
+/// <summary>
+/// Утилита: конвертировать ТАКТ:ДОЛЯ в секунды.
+/// Используй в инспекторе: bar=2, beat=3 → секунды при 128 BPM
+/// </summary>
+public float BarBeatToSeconds(int bar, int beat) =>
+    ((bar - 1) * 4 + (beat - 1)) * BeatInterval;
+
+// ════════════════════════════════════════════════════════════
+//  ПРИМЕР ТАЙМКОДОВ (заполни по своему треку)
+// ════════════════════════════════════════════════════════════
+/*
+Пример настройки в инспекторе (трек 128 BPM):
+
+Cue[0]:  timeCode = 0.0  | type = TriggerAnimation | "intro_start"
+Cue[1]:  timeCode = 1.875| type = SpawnEnemy       | BasicEnemy prefab
+Cue[2]:  timeCode = 3.75 | type = MovePlatform     | Platform1 +3 вверх
+Cue[3]:  timeCode = 5.625| type = CameraShake      | intensity 0.5
+Cue[4]:  timeCode = 7.5  | type = BgColorFlash     | Color.yellow
+...
+*/
+```
+
+}
+
+// ════════════════════════════════════════════════════════════════
+//  ТИПЫ СОБЫТИЙ
+// ════════════════════════════════════════════════════════════════
+public enum CueType
+{
+SpawnEnemy,
+SpawnCollectible,
+MovePlatform,
+CameraShake,
+BgColorFlash,
+PlaySFX,
+TriggerAnimation,
+Custom
+}
+
+[Serializable]
+public class MusicCue
+{
+[Tooltip(“Время в секундах от начала трека”)]
+public float timeCode;
+public CueType type;
+
+```
+[Header("Зависит от типа")]
+public GameObject    prefab;
+public Vector3       spawnPosition;
+public Transform     targetPlatform;
+public Vector2       moveOffset;
+public float         shakeIntensity = 0.5f;
+public Color         flashColor = Color.yellow;
+public AudioClip     sfxClip;
+public Animator      animTarget;
+public string        animTrigger;
+public UnityEngine.Events.UnityEvent customEvent;
+```
+
+}
+
+// ════════════════════════════════════════════════════════════════
+//  ПЛАТФОРМА ПОД МУЗЫКУ
+// ════════════════════════════════════════════════════════════════
+public class PlatformBeatMover : MonoBehaviour
+{
+[SerializeField] float moveSpeed = 5f;
+Vector3 targetPos;
+
+```
+void Awake() => targetPos = transform.position;
+
+public void TriggerMove(Vector2 offset)
+{
+    targetPos += (Vector3)offset;
+    StopAllCoroutines();
+    StartCoroutine(MoveRoutine());
+}
+
+IEnumerator MoveRoutine()
+{
+    while (Vector3.Distance(transform.position, targetPos) > 0.05f)
+    {
+        transform.position = Vector3.MoveTowards(transform.position, targetPos,
+                                                 moveSpeed * Time.deltaTime);
+        yield return null;
+    }
+    transform.position = targetPos;
+}
+```
+
+}
+
+// ════════════════════════════════════════════════════════════════
+//  CAMERA SHAKER (простой)
+// ════════════════════════════════════════════════════════════════
+public class CameraShaker : MonoBehaviour
+{
+public static CameraShaker Instance { get; private set; }
+
+```
+void Awake()
+{
+    if (Instance) { Destroy(gameObject); return; }
+    Instance = this;
+}
+
+public void Shake(float intensity, float duration)
+{
+    StopAllCoroutines();
+    StartCoroutine(ShakeRoutine(intensity, duration));
+}
+
+IEnumerator ShakeRoutine(float intensity, float duration)
+{
+    Vector3 origin = transform.localPosition;
+    float elapsed  = 0;
+    while (elapsed < duration)
+    {
+        transform.localPosition = origin + (Vector3)UnityEngine.Random.insideUnitCircle * intensity;
+        elapsed += Time.deltaTime;
+        yield return null;
+    }
+    transform.localPosition = origin;
+}
+```
+
+}
