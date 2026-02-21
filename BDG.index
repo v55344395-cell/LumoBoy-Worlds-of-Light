@@ -1,0 +1,400 @@
+using System.Collections;
+using UnityEngine;
+
+/// <summary>
+/// BossBase — базовый класс для всех боссов.
+/// Наследуй от него конкретных боссов.
+/// Поддерживает: фазы, здоровье, уязвимость, смерть.
+/// </summary>
+[RequireComponent(typeof(Animator))]
+public abstract class BossBase : MonoBehaviour, IDamageable
+{
+[Header(”=== Базовые настройки ===”)]
+[SerializeField] protected string bossName = “Boss”;
+[SerializeField] protected int[]  healthPerPhase = { 10, 8 }; // HP на каждую фазу
+[SerializeField] protected float  invincibleAfterHit = 0.5f;  // секунд неуязвимости
+
+```
+[Header("Аудио")]
+[SerializeField] protected AudioClip hitSound;
+[SerializeField] protected AudioClip phaseChangeSound;
+[SerializeField] protected AudioClip deathSound;
+
+// Состояние
+protected int   currentPhase = 0;
+protected int   currentHP;
+protected bool  isInvincible;
+protected bool  isAlive = true;
+
+protected Animator     anim;
+protected AudioSource  audioSrc;
+protected Transform    player;
+
+// Колбэки
+public event System.Action<int> OnPhaseChanged;
+public event System.Action      OnBossDied;
+
+protected virtual void Awake()
+{
+    anim     = GetComponent<Animator>();
+    audioSrc = GetComponent<AudioSource>() ?? gameObject.AddComponent<AudioSource>();
+    player   = GameObject.FindGameObjectWithTag("Player")?.transform;
+    currentHP = healthPerPhase[0];
+}
+
+protected virtual void Start()
+{
+    HUDController.Instance?.ShowBossHealth(bossName, currentHP, healthPerPhase[currentPhase]);
+    StartPhase(0);
+}
+
+// ════════════════════════════════════════════════════════════
+//  УРОН
+// ════════════════════════════════════════════════════════════
+public virtual void TakeDamage(int damage)
+{
+    if (!isAlive || isInvincible) return;
+
+    currentHP -= damage;
+    PlaySound(hitSound);
+    anim.SetTrigger("Hit");
+    HUDController.Instance?.UpdateBossHealth(currentHP, healthPerPhase[currentPhase]);
+
+    StartCoroutine(InvincibilityFrames());
+
+    if (currentHP <= 0)
+    {
+        int nextPhase = currentPhase + 1;
+        if (nextPhase < healthPerPhase.Length)
+            ChangePhase(nextPhase);
+        else
+            Die();
+    }
+}
+
+IEnumerator InvincibilityFrames()
+{
+    isInvincible = true;
+    yield return new WaitForSeconds(invincibleAfterHit);
+    isInvincible = false;
+}
+
+// ════════════════════════════════════════════════════════════
+//  ФАЗЫ
+// ════════════════════════════════════════════════════════════
+protected virtual void ChangePhase(int phase)
+{
+    currentPhase = phase;
+    currentHP    = healthPerPhase[phase];
+    PlaySound(phaseChangeSound);
+    anim.SetTrigger($"Phase{phase + 1}");
+    HUDController.Instance?.UpdateBossHealth(currentHP, healthPerPhase[currentPhase]);
+    OnPhaseChanged?.Invoke(phase);
+    StartPhase(phase);
+}
+
+/// <summary>Переопределяй в наследнике — логика для каждой фазы.</summary>
+protected abstract void StartPhase(int phase);
+
+// ════════════════════════════════════════════════════════════
+//  СМЕРТЬ
+// ════════════════════════════════════════════════════════════
+protected virtual void Die()
+{
+    isAlive = false;
+    StopAllCoroutines();
+    PlaySound(deathSound);
+    anim.SetTrigger("Die");
+    OnBossDied?.Invoke();
+    HUDController.Instance?.HideBossHealth();
+    StartCoroutine(DeathRoutine());
+}
+
+protected virtual IEnumerator DeathRoutine()
+{
+    yield return new WaitForSeconds(3f);
+    // Показываем экран победы / переход
+    LevelManager.Instance?.PlayerReachedEnd();
+}
+
+// ════════════════════════════════════════════════════════════
+//  УТИЛИТЫ
+// ════════════════════════════════════════════════════════════
+protected void PlaySound(AudioClip clip)
+{
+    if (clip) audioSrc.PlayOneShot(clip);
+}
+
+protected float DistanceToPlayer() =>
+    player ? Vector2.Distance(transform.position, player.position) : float.MaxValue;
+
+protected Vector2 DirToPlayer() =>
+    player ? ((Vector2)(player.position - transform.position)).normalized : Vector2.right;
+```
+
+}
+
+// ════════════════════════════════════════════════════════════════
+//  БОСС 1 — ДРАКОН ГАРУК (World 1)
+//
+//  Фаза 1 (HP = 10): стреляет огнём, иногда бьёт лапой
+//  Фаза 2 (HP = 8):  летит вперёд, быстрее стреляет, топает
+// ════════════════════════════════════════════════════════════════
+public class Boss_DragonGaruk : BossBase
+{
+[Header(”=== Гарук — Дракон ===”)]
+[SerializeField] GameObject fireballPrefab;      // снаряд огненного шара
+[SerializeField] Transform  mouthPoint;          // точка спауна огня
+[SerializeField] float      fireballCooldown = 2f;
+[SerializeField] float      fireballCooldownPhase2 = 1.1f;
+
+```
+[SerializeField] float      chargeCooldown = 5f;    // атака-забег
+[SerializeField] float      chargeSpeed    = 12f;
+[SerializeField] float      chargeDistance = 8f;
+
+[SerializeField] GameObject shockwavePrefab;       // волна при топоте
+
+// Внутреннее состояние
+float fireTimer;
+float chargeTimer;
+bool  isCharging;
+Vector2 chargeStartPos;
+Vector2 chargeTargetPos;
+
+protected override void Awake()
+{
+    base.Awake();
+    // Переопределяем HP
+    healthPerPhase = new[] { 10, 8 };
+}
+
+protected override void StartPhase(int phase)
+{
+    StopAllCoroutines();
+    fireTimer  = 1f;       // первый выстрел через 1 сек
+    chargeTimer = chargeCooldown;
+
+    if (phase == 1)
+    {
+        // Фаза 2: тряска экрана, драматический эффект
+        CameraShaker.Instance?.Shake(0.8f, 1.0f);
+        StartCoroutine(Phase2Intro());
+    }
+    else
+    {
+        StartCoroutine(Phase1Loop());
+    }
+}
+
+// ─── ФАЗА 1 ──────────────────────────────────────────────
+IEnumerator Phase1Loop()
+{
+    while (isAlive && currentPhase == 0)
+    {
+        // Огненный шар
+        fireTimer -= Time.deltaTime;
+        if (fireTimer <= 0)
+        {
+            ShootFireball();
+            fireTimer = fireballCooldown;
+        }
+
+        // Топот (если игрок близко)
+        chargeTimer -= Time.deltaTime;
+        if (chargeTimer <= 0 && DistanceToPlayer() < 5f)
+        {
+            yield return StartCoroutine(StompAttack());
+            chargeTimer = chargeCooldown;
+        }
+
+        // Поворот к игроку
+        FacePlayer();
+        yield return null;
+    }
+}
+
+// ─── ФАЗА 2 ──────────────────────────────────────────────
+IEnumerator Phase2Intro()
+{
+    // Короткая драматическая пауза
+    yield return new WaitForSeconds(1.5f);
+    StartCoroutine(Phase2Loop());
+}
+
+IEnumerator Phase2Loop()
+{
+    while (isAlive && currentPhase == 1)
+    {
+        fireTimer -= Time.deltaTime;
+        if (fireTimer <= 0)
+        {
+            // В фазе 2 — тройной залп
+            yield return StartCoroutine(TripleFireball());
+            fireTimer = fireballCooldownPhase2;
+        }
+
+        chargeTimer -= Time.deltaTime;
+        if (chargeTimer <= 0 && !isCharging)
+        {
+            yield return StartCoroutine(ChargeAttack());
+            chargeTimer = chargeCooldown * 0.7f;
+        }
+
+        FacePlayer();
+        yield return null;
+    }
+}
+
+// ─── АТАКИ ───────────────────────────────────────────────
+
+void ShootFireball()
+{
+    if (!mouthPoint || !fireballPrefab) return;
+    anim.SetTrigger("ShootFire");
+
+    var fb = Instantiate(fireballPrefab, mouthPoint.position, Quaternion.identity);
+    Vector2 dir = DirToPlayer();
+    fb.GetComponent<Rigidbody2D>()?.AddForce(dir * 10f, ForceMode2D.Impulse);
+
+    // Снаряд наносит урон при касании
+    var proj = fb.AddComponent<BossProjectile>();
+    proj.damage = 1;
+}
+
+IEnumerator TripleFireball()
+{
+    for (int i = 0; i < 3; i++)
+    {
+        ShootFireball();
+        yield return new WaitForSeconds(0.2f);
+    }
+}
+
+IEnumerator StompAttack()
+{
+    anim.SetTrigger("Stomp");
+    yield return new WaitForSeconds(0.5f); // время анимации
+
+    // Волна при ударе
+    if (shockwavePrefab)
+        Instantiate(shockwavePrefab, transform.position + Vector3.down, Quaternion.identity);
+
+    CameraShaker.Instance?.Shake(0.4f, 0.3f);
+}
+
+IEnumerator ChargeAttack()
+{
+    isCharging = true;
+    anim.SetTrigger("Charge");
+
+    chargeStartPos  = transform.position;
+    float dir       = transform.localScale.x > 0 ? 1f : -1f;
+    chargeTargetPos = chargeStartPos + Vector2.right * (chargeDistance * dir);
+
+    var rb = GetComponent<Rigidbody2D>();
+    float elapsed = 0;
+    float duration = chargeDistance / chargeSpeed;
+
+    while (elapsed < duration)
+    {
+        elapsed += Time.deltaTime;
+        transform.position = Vector2.MoveTowards(transform.position,
+                                                 chargeTargetPos, chargeSpeed * Time.deltaTime);
+        yield return null;
+    }
+
+    isCharging = false;
+    anim.SetTrigger("ChargeEnd");
+}
+
+// ─── ВСПОМОГАТЕЛЬНОЕ ─────────────────────────────────────
+
+void FacePlayer()
+{
+    if (!player) return;
+    float sx = transform.localScale.x;
+    bool  shouldFaceRight = player.position.x > transform.position.x;
+    float newSx = shouldFaceRight ? Mathf.Abs(sx) : -Mathf.Abs(sx);
+    transform.localScale = new Vector3(newSx, transform.localScale.y, transform.localScale.z);
+}
+```
+
+}
+
+// ════════════════════════════════════════════════════════════════
+//  СНАРЯД БОССА
+// ════════════════════════════════════════════════════════════════
+public class BossProjectile : MonoBehaviour
+{
+public int damage = 1;
+[SerializeField] float lifetime = 5f;
+
+```
+void Start() => Destroy(gameObject, lifetime);
+
+void OnTriggerEnter2D(Collider2D col)
+{
+    if (col.CompareTag("Player"))
+    {
+        col.GetComponent<PlayerHealth>()?.TakeDamage(damage);
+        Destroy(gameObject);
+    }
+    else if (col.CompareTag("Ground"))
+    {
+        Destroy(gameObject);
+    }
+}
+```
+
+}
+
+// ════════════════════════════════════════════════════════════════
+//  ЗДОРОВЬЕ ИГРОКА
+// ════════════════════════════════════════════════════════════════
+public class PlayerHealth : MonoBehaviour, IDamageable
+{
+[SerializeField] int maxHP = 3;
+[SerializeField] float invincibleTime = 1.5f;
+[SerializeField] AudioClip hurtSound;
+[SerializeField] AudioClip deathSound;
+
+```
+public int CurrentHP { get; private set; }
+bool isInvincible;
+
+void Awake() => CurrentHP = maxHP;
+
+public void TakeDamage(int damage)
+{
+    if (isInvincible) return;
+    CurrentHP = Mathf.Max(0, CurrentHP - damage);
+    AudioSource.PlayClipAtPoint(hurtSound, transform.position);
+    HUDController.Instance?.UpdatePlayerHealth(CurrentHP, maxHP);
+
+    if (CurrentHP <= 0) { AudioSource.PlayClipAtPoint(deathSound, transform.position); LevelManager.Instance?.PlayerDied(); }
+    else StartCoroutine(InvincibilityRoutine());
+}
+
+public void Respawn()
+{
+    CurrentHP = maxHP;
+    HUDController.Instance?.UpdatePlayerHealth(CurrentHP, maxHP);
+}
+
+IEnumerator InvincibilityRoutine()
+{
+    isInvincible = true;
+    // Мигаем
+    var sr = GetComponent<SpriteRenderer>();
+    for (int i = 0; i < 10; i++)
+    {
+        if (sr) sr.enabled = !sr.enabled;
+        yield return new WaitForSeconds(invincibleTime / 20f);
+    }
+    if (sr) sr.enabled = true;
+    isInvincible = false;
+}
+```
+
+}
