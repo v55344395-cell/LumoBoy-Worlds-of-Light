@@ -1,0 +1,165 @@
+using System.Collections.Generic;
+using UnityEngine;
+
+/// <summary>
+/// SkinManager — система разблокируемых костюмов LumoBoy.
+/// Меняет спрайты и RuntimeAnimatorController.
+/// Скины чисто косметические — никаких бонусов.
+/// </summary>
+public class SkinManager : MonoBehaviour
+{
+public static SkinManager Instance { get; private set; }
+
+```
+[SerializeField] SkinDatabase database;             // ScriptableObject со всеми скинами
+[SerializeField] SpriteRenderer playerRenderer;
+[SerializeField] Animator playerAnimator;
+
+// Текущий скин
+public SkinData CurrentSkin { get; private set; }
+
+const string SAVE_KEY_EQUIPPED  = "skin_equipped";
+const string SAVE_KEY_UNLOCKED  = "skin_unlocked_";
+
+void Awake()
+{
+    if (Instance != null) { Destroy(gameObject); return; }
+    Instance = this;
+    DontDestroyOnLoad(gameObject);
+}
+
+void Start()
+{
+    // Разблокируем первый скин по умолчанию
+    UnlockSkin("default");
+
+    // Загружаем последний экипированный
+    string equipped = PlayerPrefs.GetString(SAVE_KEY_EQUIPPED, "default");
+    EquipSkin(equipped);
+}
+
+// ─── Публичное API ───────────────────────────────────────────
+
+/// <summary>Надеть скин по ID.</summary>
+public void EquipSkin(string skinId)
+{
+    if (!IsSkinUnlocked(skinId)) { Debug.Log($"Скин {skinId} не разблокирован!"); return; }
+
+    SkinData skin = database.GetSkin(skinId);
+    if (skin == null) return;
+
+    CurrentSkin = skin;
+    PlayerPrefs.SetString(SAVE_KEY_EQUIPPED, skinId);
+    PlayerPrefs.Save();
+
+    ApplySkinToPlayer(skin);
+}
+
+/// <summary>Разблокировать скин.</summary>
+public void UnlockSkin(string skinId)
+{
+    PlayerPrefs.SetInt(SAVE_KEY_UNLOCKED + skinId, 1);
+    PlayerPrefs.Save();
+    Debug.Log($"Скин разблокирован: {skinId}");
+}
+
+public bool IsSkinUnlocked(string skinId) =>
+    PlayerPrefs.GetInt(SAVE_KEY_UNLOCKED + skinId, 0) == 1;
+
+public List<SkinData> GetAllSkins() => database.AllSkins;
+
+// ─── Приватное ───────────────────────────────────────────────
+
+void ApplySkinToPlayer(SkinData skin)
+{
+    // Находим игрока если ссылки нет
+    if (playerRenderer == null)
+    {
+        var p = GameObject.FindGameObjectWithTag("Player");
+        if (p)
+        {
+            playerRenderer  = p.GetComponent<SpriteRenderer>();
+            playerAnimator  = p.GetComponent<Animator>();
+        }
+    }
+
+    if (playerRenderer == null) return;
+
+    // Меняем цвет (тинт) — для простых цветовых скинов
+    if (skin.colorTint != Color.clear)
+        playerRenderer.color = skin.colorTint;
+
+    // Меняем AnimatorController если есть свой
+    if (skin.animatorController != null && playerAnimator != null)
+        playerAnimator.runtimeAnimatorController = skin.animatorController;
+
+    // Меняем спрайт (idle-кадр) для превью
+    if (skin.previewSprite != null)
+        playerRenderer.sprite = skin.previewSprite;
+}
+```
+
+}
+
+// ════════════════════════════════════════════════════════════════
+//  ДАННЫЕ ОДНОГО СКИНА
+// ════════════════════════════════════════════════════════════════
+[System.Serializable]
+public class SkinData
+{
+public string id;                              // “default”, “fire_lumo”, “ice_lumo”…
+public string displayName;                     // “Огненный Лумо”
+[TextArea] public string description;
+public Sprite previewSprite;                   // иконка в меню
+public RuntimeAnimatorController animatorController; // null = использовать базовый
+public Color colorTint = Color.white;          // простой тинт-цвет
+
+```
+[Header("Условие разблокировки")]
+public UnlockCondition unlockCondition;
+public string unlockHint;                      // "Спаси 100 Лумиков"
+```
+
+}
+
+public enum UnlockCondition
+{
+Default,        // доступен с начала
+SaveNPCs,       // спасти N NPC
+CollectCoins,   // собрать N монет
+BeatBoss,       // победить босса
+Purchase,       // купить за монеты
+Secret          // секретный
+}
+
+// ════════════════════════════════════════════════════════════════
+//  DATABASE — ScriptableObject со всеми скинами
+// ════════════════════════════════════════════════════════════════
+[CreateAssetMenu(fileName = “SkinDatabase”, menuName = “LumoBoy/Skin Database”)]
+public class SkinDatabase : ScriptableObject
+{
+[SerializeField] List<SkinData> skins = new();
+public List<SkinData> AllSkins => skins;
+
+```
+public SkinData GetSkin(string id) => skins.Find(s => s.id == id);
+```
+
+}
+
+/*
+=== СПИСОК СКИНОВ (добавь в SkinDatabase через инспектор) ===
+
+|ID          |Название         |Условие разблокировки|
+|------------|-----------------|---------------------|
+|default     |Обычный Лумо     |Default (с начала)   |
+|fire_lumo   |Огненный Лумо    |BeatBoss (World 1)   |
+|ice_lumo    |Ледяной Лумо     |BeatBoss (World 2)   |
+|gear_lumo   |Механический Лумо|BeatBoss (World 3)   |
+|cloud_lumo  |Облачный Лумо    |BeatBoss (World 4)   |
+|shadow_lumo |Теневой Лумо     |BeatBoss (World 5)   |
+|golden_lumo |Золотой Лумо     |CollectCoins (500)   |
+|rainbow_lumo|Радужный Лумо    |SaveNPCs (200)       |
+|tiny_lumo   |Малыш Лумо       |Secret               |
+|classic_lumo|Классический Лумо|Purchase (100 монет) |
+|*/          |                 |                     |
